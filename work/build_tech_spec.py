@@ -176,6 +176,7 @@ add_code(doc, '''{
 }''')
 
 doc.add_heading("7. Демонстрационные данные", level=1)
+add_bullet(doc, "Всего 530 обезличенных тестовых заявок.")
 add_bullet(doc, "500 WMS-обращений с ключами WMS-*.")
 add_bullet(doc, "30 задач разработки типа Development Bug с ключами PROB-*.")
 add_bullet(doc, "175 WMS-кейсов содержат переписку консультанта с пользователем.")
