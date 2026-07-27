@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI Jira помощник</title><link rel="stylesheet" href="/public/style.css"></head>
+<body><main>
+  <h1>AI Jira помощник</h1><p class="sub">Тестовый анализ обращений, переписки и скриншотов</p><div id="status"></div>
+  <form id="form">
+    <label>Текст обращения<textarea id="ticket" required placeholder="Опишите проблему или вставьте текст Jira-задачи"></textarea></label>
+    <label>Переписка с консультантом<textarea id="chat" placeholder="Вставьте диалог, если он есть"></textarea></label>
+    <label>Скриншоты ошибок<input id="images" type="file" accept="image/png,image/jpeg,image/webp" multiple></label>
+    <button>Проанализировать</button>
+  </form>
+  <section id="output" hidden></section>
+</main>
+<script>
+const q=s=>document.querySelector(s);
+const esc=s=>String(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const list=items=>`<ul>${(items||[]).map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`;
+fetch('/api/status').then(r=>r.json()).then(s=>q('#status').innerHTML=`<p class="status">Режим: локальный ИИ Ollama (${esc(s.ollama.chatModel)}) · Поиск: ${esc(s.ollama.embedModel)} · Jira/Confluence: ${s.atlassian?'подключены':'демо-режим'}</p>`);
+q('#form').onsubmit=async e=>{
+  e.preventDefault(); const button=q('button'),out=q('#output'); button.disabled=true; button.textContent='Анализируем…';
+  try {
+    const images=await Promise.all([...q('#images').files].map(f=>new Promise((ok,no)=>{const r=new FileReader;r.onload=()=>ok(r.result);r.onerror=no;r.readAsDataURL(f)})));
+    const response=await fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticketText:q('#ticket').value,conversation:q('#chat').value,images})});
+    const data=await response.json(); if(data.error) throw Error(data.error);
+    const result=data.result, solution=result.solution_scenario||{goal:'Рекомендуемые действия',steps:result.recommended_actions||[],verification:[],escalation:[]};
+    const scenarioNote=data.scenarioSearch.mode==='ollama'?'Сценарии найдены локальным семантическим поиском Ollama.':data.scenarioSearch.warning;
+    const docsNote=data.documentationSearch.mode==='ollama'?'Документация найдена локальным семантическим поиском Ollama.':data.documentationSearch.warning;
+    const agentNote=`Сабагент обращений: ${data.agents.incidents.status}; сабагент документации: ${data.agents.documentation.status}; оркестратор: ${data.agents.orchestrator.status}.`;
+    const agentErrors=[['Сабагент обращений',data.agents.incidents.error],['Сабагент документации',data.agents.documentation.error],['Оркестратор',data.agents.orchestrator.error]].filter(([,error])=>error).map(([name,error])=>`${name}: ${error}`);
+    const issueMarkup=(items,empty)=>items&&items.length?`<ul>${items.map(i=>`<li>${i.url?`<a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.key)}</a>`:`<b>${esc(i.key)}</b>`} — ${esc(i.summary)}<br><small>${esc(i.source==='jira-development'?'Jira: задача разработки':'Jira: найденное обращение')} · ${esc(i.status||'')}</small></li>`).join('')}</ul>`:`<p>${esc(empty)}</p>`;
+    out.hidden=false;
+    out.innerHTML=`<h2>Результат оркестратора</h2><p>${esc(result.summary)}</p><p><small>${esc(agentNote)}</small></p>${agentErrors.length?`<p class="error">${agentErrors.map(esc).join('<br>')}</p>`:''}${result.imageNote?`<p class="risk">${esc(result.imageNote)}</p>`:''}<h3>Возможные причины</h3><ul>${(result.possible_causes||[]).map(v=>`<li><b>${esc(v.cause)}</b> <small>(${esc(v.confidence)})</small><br>${esc(v.evidence)}</li>`).join('')}</ul>${(result.error_locations||[]).length?`<h3>Где возникает ошибка в логике</h3><ul>${result.error_locations.map(point=>`<li><b>${esc(point.error)}</b><br>${esc(point.location)}<br><small>${esc(point.condition)}</small></li>`).join('')}</ul>`:''}<h3>Сценарий решения</h3><p><b>Цель:</b> ${esc(solution.goal)}</p><h4>Шаги</h4>${list(solution.steps)}<h4>Проверка результата</h4>${list(solution.verification)}<h4>Когда эскалировать</h4>${list(solution.escalation)}<h3>Уточняющие вопросы</h3>${list(result.questions)}<p class="risk">${esc(result.risk_note)}</p><h3>Похожие обращения</h3><p><small>${esc(scenarioNote)}</small></p>${data.similarIssues.length?'<ul>'+data.similarIssues.map(i=>`<li><b>${esc(i.key)}</b> — ${esc(i.summary)}<br><small>Решение: ${esc(i.resolution)}</small></li>`).join('')+'</ul>':'<p>Не найдены.</p>'}<h3>Найденные обращения Jira</h3>${issueMarkup(data.liveIssues,'В Jira ничего не найдено.')}<h3>Задачи разработки Jira</h3>${issueMarkup(data.developerIssues,'Задачи разработки не найдены.')}<h3>Документация</h3><p><small>${esc(docsNote)}</small></p>${data.documentation.length?'<ul>'+data.documentation.map(p=>`<li>${p.url?`<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a>`:esc(p.title)}<br><small>${esc(p.excerpt)}</small></li>`).join('')+'</ul>':'<p>Ничего не найдено.</p>'}`;
+  } catch(err) { out.hidden=false; out.innerHTML=`<p class="error">${esc(err.message)}</p>`; }
+  finally { button.disabled=false;button.textContent='Проанализировать'; }
+};
+</script></body></html>
